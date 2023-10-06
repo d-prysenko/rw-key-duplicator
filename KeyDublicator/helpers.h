@@ -1,3 +1,5 @@
+#ifndef HELPERS_H
+#define HELPERS_H
 
 #define READ_ROM_CODE 0x33
 
@@ -20,3 +22,5 @@ bool isBuffersEquals(byte* buf1, byte* buf2, byte length) {
 
   return true;
 }
+
+#endif

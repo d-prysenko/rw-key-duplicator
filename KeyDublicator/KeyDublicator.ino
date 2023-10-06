@@ -1,12 +1,14 @@
 #include <OneWire.h>
 #include "helpers.h"
+#include "button.h"
+#include "mode.h"
 
 #define iButtonPin 5      // Линия data ibutton
 #define BtnPin 7          // Кнопка переключения режима чтение/запись
 
-OneWire ibutton (iButtonPin); 
+OneWire ibutton (iButtonPin);
 byte keyID[8];                            // ID ключа для записи
-bool keySuccessfulRead = false;           // флаг сигнализируе, что данные с ключа успечно прочианы в ардуино
+Button modeSwitchBtn(BtnPin);
 
 enum emRWType {TM01, RW1990_1, RW1990_2, TM2004};                            // тип болванки
 enum emkeyType {keyUnknown, keyDallas, keyTM2004, keyCyfral, keyMetacom};    // тип оригинального ключа  
@@ -29,7 +31,6 @@ void ACsetOn();
 unsigned long pulseAComp(bool pulse, unsigned long timeOut = 20000);
 bool validateCyfralByte(byte testByte);
 
-bool isButtonPressed();
 bool tryToSwitchMode(bool isWritingMode);
 
 bool parseKeyData(byte* buf);
@@ -38,23 +39,22 @@ bool parseKeyData(byte* buf);
 // The lower seven bits of the family code indicate the device type; the most significant bit of the family code is used to flag customer–specific versions
 
 void setup() {
-  // включаем чтение и подягиваем пин кнопки режима к +5В
-  pinMode(BtnPin, INPUT_PULLUP);
   Serial.begin(115200);
 }
 
 
 void loop() {
   byte keyDataBuffer[8];
-  static bool isWritingMode = false;
+  static Mode mode;
+  static bool isKeySuccessfulRead = false;
 
-  if (Serial.read() == 't' || isButtonPressed()) {
-    isWritingMode = tryToSwitchMode(isWritingMode);
+  if (Serial.read() == 't' || modeSwitchBtn.isPressed()) {
+    mode.tryToSwitchMode(isKeySuccessfulRead);
   }
 
   // запускаем поиск cyfral
-  if (!isWritingMode && tryToReadCyfral()) {
-    keySuccessfulRead = true;
+  if (mode.isReading() && tryToReadCyfral()) {
+    isKeySuccessfulRead = true;
   }
 
   // пробуем прочитать dallas
@@ -66,42 +66,13 @@ void loop() {
     return;
   }
 
-  if (!isWritingMode)
+  if (mode.isReading())
     // чиаем ключ dallas
-    keySuccessfulRead = parseKeyData(keyDataBuffer);
+    isKeySuccessfulRead = parseKeyData(keyDataBuffer);
   else
     write2iBtn(keyDataBuffer);
 
   delay(300);
-}
-
-bool isButtonPressed() {
-  static bool prevBtnState = LOW;
-  bool currentBtnState = digitalRead(BtnPin);
-  bool isClicked;
-
-  if (prevBtnState == HIGH && currentBtnState == LOW)
-    isClicked = true;
-  else
-    isClicked = false;
-
-  prevBtnState = currentBtnState;
-
-  return isClicked;
-}
-
-bool tryToSwitchMode(bool isWritingMode) {
-  if (isWritingMode) {
-    isWritingMode = false;
-    Serial.println("Switched to reading mode");
-  } else if (!isWritingMode && keySuccessfulRead == true) {
-    isWritingMode = true;
-    Serial.println("Switched to writing mode");
-  } else {
-    Serial.println("Key wasn't successfuly read, can't switch to writing mode");
-  }
-
-  return isWritingMode;
 }
 
 //*************** dallas **************
@@ -117,9 +88,8 @@ bool parseKeyData(byte* buf){
   if (buf[0] == DALLAS_FAMILY_CODE) {
     keyType = keyDallas;
     if (getRWtype() == TM2004) {
-      //Serial.println(" Type: dallas TM2004");
       keyType = keyTM2004;
-    } //else Serial.println(" Type: dallas RW1990.x");
+    }
 
     if (OneWire::crc8(buf, 7) != buf[7]) {
       Serial.println("CRC is not valid!");
@@ -346,10 +316,14 @@ bool write2iBtnRW1990_1_2_TM01(emRWType rwType){
 
     // записываем значение флага финализации = 1 - перевезти формат
     ibutton.write_bit(1);
+
     delay(10);
+
     pinMode(iButtonPin, INPUT);
   }
+
   delay(500);
+
   return true;
 }
 
@@ -390,7 +364,7 @@ bool write2iBtn(byte* blankKeyData){
   }
 
   // определяем тип RW-1990.1 или 1990.2 или TM-01
-  byte rwType = getRWtype();
+  emRWType rwType = getRWtype();
 
   Serial.print("\n Burning iButton ID: ");
 
@@ -425,6 +399,7 @@ bool tryToReadCyfral(){
   return true;  
 }
 
+// понятия не имею, что тут происходит
 bool readCyfral(byte* buf, byte CyfralPin){
   unsigned long ti;
   byte j = 0;
