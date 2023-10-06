@@ -2,6 +2,9 @@
 #include "helpers.h"
 #include "button.h"
 #include "mode.h"
+#include "Keys/BlankKey.h"
+#include "Keys/Key_RW1990_1_2_TM01.h"
+#include "Keys/Key_TM2004.h"
 
 #define iButtonPin 5      // Линия data ibutton
 #define BtnPin 7          // Кнопка переключения режима чтение/запись
@@ -19,10 +22,6 @@ bool isRW1990_1();
 bool isRW1990_2();
 bool isTM2004();
 
-bool write2iBtnTM2004();
-bool write2iBtnRW1990_1_2_TM01(emRWType rwType);
-void BurnByte(byte data);
-bool isDataSuccessfulyWrited();
 bool write2iBtn(byte* blankKeyData);
 
 bool tryToReadCyfral();
@@ -67,7 +66,6 @@ void loop() {
   }
 
   if (mode.isReading())
-    // чиаем ключ dallas
     isKeySuccessfulRead = parseKeyData(keyDataBuffer);
   else
     write2iBtn(keyDataBuffer);
@@ -87,6 +85,7 @@ bool parseKeyData(byte* buf){
   // это ключ формата dallas
   if (buf[0] == DALLAS_FAMILY_CODE) {
     keyType = keyDallas;
+
     if (getRWtype() == TM2004) {
       keyType = keyTM2004;
     }
@@ -105,7 +104,8 @@ bool parseKeyData(byte* buf){
     Serial.println(" Type: unknown family dallas");
 
   keyType = keyUnknown;
-
+  
+  // хз, а вдруг прокатит ;D
   return true;
 }
 
@@ -207,148 +207,6 @@ bool isTM2004() {
   ibutton.reset();
 }
 
-// функция записи на TM2004
-bool write2iBtnTM2004(){
-  byte answer;
-  bool result = true;
-
-  ibutton.reset();
-
-  ibutton.write(0x3C);                // команда записи ROM для TM-2004    
-  ibutton.write(0x00);
-  ibutton.write(0x00);                // передаем адрес с которого начинается запись
-
-  for (byte i = 0; i < 8; i++){
-    ibutton.write(keyID[i]);
-
-    answer = ibutton.read();
-
-    //if (OneWire::crc8(m1, 3) != answer){result = false; break;}     // crc не верный
-    // испульс записи
-
-    delayMicroseconds(600);
-
-    ibutton.write_bit(1);
-
-    delay(50);
-
-    pinMode(iButtonPin, INPUT);
-
-    Serial.print('*');
-
-    //читаем записанный байт и сравниваем, с тем что должно записаться
-    if (keyID[i] != ibutton.read()) {
-      result = false;
-      break;
-    }
-  } 
-
-  if (!result){
-    ibutton.reset();
-    Serial.println(" The key copy faild");
-
-    return false;    
-  }
-
-  ibutton.reset();
-
-  Serial.println(" The key has copied successesfully");
-
-  delay(500);
-
-  return true;
-}
-
-// функция записи на RW1990.1, RW1990.2, TM-01C(F)
-bool write2iBtnRW1990_1_2_TM01(emRWType rwType){
-  byte rwCmd, rwFlag = 1;
-
-  switch (rwType){
-    case TM01: rwCmd = 0xC1; break;                   //TM-01C(F)
-    case RW1990_1: rwCmd = 0xD1; rwFlag = 0; break;  // RW1990.1  флаг записи инвертирован
-    case RW1990_2: rwCmd = 0x1D; break;              // RW1990.2
-  }
-
-  ibutton.reset();
-  ibutton.write(rwCmd);               // send 0xD1 - флаг записи
-  ibutton.write_bit(rwFlag);          // записываем значение флага записи = 1 - разрешить запись
-
-  delay(10);
-  
-  pinMode(iButtonPin, INPUT);
-
-  ibutton.reset();
-  ibutton.write(0xD5);        // команда на запись
-
-  for (byte i = 0; i<8; i++){
-
-    if (rwType == RW1990_1)
-      BurnByte(~keyID[i]);      // запись происходит инверсно для RW1990.1
-    else
-      BurnByte(keyID[i]);
-
-    Serial.print('*');
-  } 
-
-  ibutton.write(rwCmd);                     // send 0xD1 - флаг записи
-  ibutton.write_bit(!rwFlag);               // записываем значение флага записи = 1 - отключаем запись
-
-  delay(10);
-
-  pinMode(iButtonPin, INPUT);
-
-  // проверяем корректность записи
-  if (!isDataSuccessfulyWrited()){
-    Serial.println(" The key copy faild");
-    return false;
-  }
-
-  Serial.println(" The key has copied successesfully");
-
-  // переводим ключ из формата dallas
-  if (keyType == keyMetacom || keyType == keyCyfral){
-    ibutton.reset();
-
-    if (keyType == keyCyfral)
-      ibutton.write(INIT_CYFRAL);       // send 0xCA - флаг финализации Cyfral
-    else
-      ibutton.write(INIT_METACOM);      // send 0xCA - флаг финализации metacom
-
-    // записываем значение флага финализации = 1 - перевезти формат
-    ibutton.write_bit(1);
-
-    delay(10);
-
-    pinMode(iButtonPin, INPUT);
-  }
-
-  delay(500);
-
-  return true;
-}
-
-void BurnByte(byte data){
-  for(byte n_bit = 0; n_bit < 8; n_bit++){ 
-    ibutton.write_bit(data & 1);  
-    delay(5);                        // даем время на прошивку каждого бита до 10 мс
-    data = data >> 1;                // переходим к следующему bit
-  }
-  pinMode(iButtonPin, INPUT);
-}
-
-bool isDataSuccessfulyWrited(){
-  byte buff[8];
-
-  if (!ibutton.reset())
-    return false;
-
-  ibutton.write(READ_ROM_CODE);
-  ibutton.read_bytes(buff, 8);
-
-  // сравниваем код для записи с тем, что уже записано в ключе.
-  return isBuffersEquals(keyID, buff, 8);
-}
-
 bool write2iBtn(byte* blankKeyData){
   Serial.print("The new key code is: ");
 
@@ -368,10 +226,27 @@ bool write2iBtn(byte* blankKeyData){
 
   Serial.print("\n Burning iButton ID: ");
 
-  if (rwType == TM2004)
-    return write2iBtnTM2004();  //шьем TM2004
-  else
-    return write2iBtnRW1990_1_2_TM01(rwType); //пробуем прошить другие форматы
+  AbstractKey* blankKey = blankKeyFactory(rwType);
+  bool res = blankKey->write(keyID);
+  delete blankKey;
+
+  return res;
+}
+
+AbstractKey* blankKeyFactory(emRWType rwType) {
+  switch (rwType)
+  {
+  case emRWType::RW1990_1:
+    return new Key_RW1990_1(&ibutton, iButtonPin);
+  case emRWType::RW1990_2:
+    return new Key_RW1990_2(&ibutton, iButtonPin);
+  case emRWType::TM01:
+    return new Key_TM01(&ibutton, iButtonPin);
+  case emRWType::TM2004:
+    return new Key_TM2004(&ibutton, iButtonPin);
+  default:
+    return 0;
+  }
 }
 
 //************ Cyfral ***********************
@@ -471,7 +346,7 @@ unsigned long pulseAComp(bool pulse, unsigned long timeOut){  // pulse HIGH or L
       } while ((long)(micros() - tStart) < timeOut);
 
       return 0;                                                 //таймаут, импульс не вернуся оратно
-    }             // end if
+    }
 
   } while ((long)(micros() - tStart) < timeOut);
 
